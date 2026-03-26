@@ -214,7 +214,7 @@ Analisamos aqui as duas campanhas e conseguimos entender o que aconteceu. A boa 
 O problema em si está na camada de rastreamento, que explicarei melhor abaixo:
 
 **Campanha Apple (19/03)**
-Os disparos foram realizados normalmente — temos 149 registros confirmados na base. O que aconteceu é que um campo de identificação (o `version`, que deveria conter `sendtype-835`) foi gravado com o valor genérico `'1'`. Por isso, quando o painel tenta buscar os disparos pelo Send Type 835, ele não encontra nada. **Os dados estão lá, só precisamos corrigir o filtro ou reprocessar o campo.**
+Os disparos foram realizados normalmente — temos 149 registros confirmados na base. O que aconteceu é que um campo de identificação (o `version`, que deveria conter `sendtype-835`) foi gravado com o valor genérico `'1'`. Por isso, quando o painel tenta buscar os disparos pelo Send Type 835, ele não encontra nada. **Os dados estão lá, só precisamos corrigir o filtro  troca version = 'sendtype-835' por version IN ('sendtype-835', '1') AND template LIKE '%crm_cerebro_ads_apple% ou reprocessar o campo.**
 
 **Campanha Samsung (20/03)**
 Aqui o caso é diferente: o pipeline de rastreamento teve um problema ao registrar os disparos. O botão `"Comprar Galaxy S26"` foi enviado num formato que o sistema não conseguiu processar, e os eventos foram descartados antes de chegarem ao banco. Mas posso confirmar pelo histórico de conversas que **mais de 4.000 clientes receberam e interagiram com a campanha**, e o cupom CUPOMS26 foi utilizado. Então o envio ocorreu — só não ficou registrado como campanha.
