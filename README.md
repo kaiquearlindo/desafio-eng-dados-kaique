@@ -208,22 +208,24 @@ Logs com `Successfully sent message` confirmam que o Omnichannel entregou as men
 
 ---
 
-**Oi [Nome]! Bom dia 👋**
+**Oi [Analista de CRM]. Boa tarde, tudo jóia?**
 
-Analisei as duas campanhas e já encontrei o que aconteceu. A boa notícia é que **as mensagens chegaram aos clientes** nos dois casos — então o impacto na operação foi mínimo. O problema está na camada de rastreamento, que explico abaixo:
+Analisamos aqui as duas campanhas e conseguimos entender o que aconteceu. A boa notícia é que **as mensagens chegaram aos clientes** nos dois casos, então o impacto na operação foi mínimo. 
+O problema em si está na camada de rastreamento, que explicarei melhor abaixo:
 
-**📱 Campanha Apple (19/03)**
+**Campanha Apple (19/03)**
 Os disparos foram realizados normalmente — temos 149 registros confirmados na base. O que aconteceu é que um campo de identificação (o `version`, que deveria conter `sendtype-835`) foi gravado com o valor genérico `'1'`. Por isso, quando o painel tenta buscar os disparos pelo Send Type 835, ele não encontra nada. **Os dados estão lá, só precisamos corrigir o filtro ou reprocessar o campo.**
 
-**📱 Campanha Samsung (20/03)**
+**Campanha Samsung (20/03)**
 Aqui o caso é diferente: o pipeline de rastreamento teve um problema ao registrar os disparos. O botão `"Comprar Galaxy S26"` foi enviado num formato que o sistema não conseguiu processar, e os eventos foram descartados antes de chegarem ao banco. Mas posso confirmar pelo histórico de conversas que **mais de 4.000 clientes receberam e interagiram com a campanha**, e o cupom CUPOMS26 foi utilizado. Então o envio ocorreu — só não ficou registrado como campanha.
 
 **O que farei agora:**
-1. Corrigir o filtro do dashboard para cobrir os registros da Apple com `version = '1'`
-2. Abrir chamado com o time de engenharia para ajustar a serialização do CTA da Samsung
-3. Propor um monitor automático para detectar esse tipo de falha antes que chegue até vocês
+1. Corrigir o filtro do dashboard para cobrir os registros da Apple com `version = '1'`.
+2. Corrigir na origem e investigar por que o Pub/Sub gravou '1' ao invés de 'sendtype-835', para os próximos disparos já chegarem corretos para nós na raw.
+3. Verificar com a equipe para ajustar a serialização do CTA da Samsung.
+4. Propor um monitor automático para detectar esse tipo de falha antes que chegue até vocês*****
 
-Qualquer dúvida, me chamem! 🙂
+Qualquer dúvida, estamos à disposição.
 
 ---
 
@@ -251,7 +253,7 @@ GROUP BY 1, 2
 HAVING total > 0;
 ```
 
-> Se retornar linhas → alerta no Slack/PagerDuty.
+> Se retornar linhas → alerta em algum canal do Gchat ou e-mail.
 
 **Monitor 2 — Campanhas disparadas mas sem registro (via conversas)**
 
@@ -314,9 +316,9 @@ ORDER BY 1 DESC;
 ```
 Erro detectado (monitor dispara)
         ↓
-Alerta no canal #data-alerts (Slack)
+Alerta no canal da equipe (Gchat)
         ↓
-Engenheiro de plantão verifica em < 30min
+Engenheiro verifica em < 30min
         ↓
 Se campanha ativa: notifica CRM proativamente
         ↓
@@ -328,7 +330,7 @@ RCA documentado no Confluence
 ## 8. Infraestrutura Utilizada
 
 - **BigQuery** — armazenamento e consulta das tabelas `campanhas`, `conversas` e `logs_omnichannel`
-- **Apache Airflow (Cloud Composer)** — DAG para ingestão dos arquivos JSON → BigQuery
+- **Apache Airflow (Cloud Composer)** — DAG para ingestão dos arquivos JSON (campanhas, conversas) → BigQuery
 - **Python / Pandas** — exploração inicial dos dados antes da ingestão
 - **Cloud Logging / Cloud Monitoring** — base para os alertas de log
 
