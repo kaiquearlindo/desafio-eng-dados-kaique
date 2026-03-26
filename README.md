@@ -1,7 +1,7 @@
 # 🔍 Desafio Engenheiro de Dados Pleno — Investigação de Campanhas
 
-**Candidato:** [Seu Nome]
-**Vaga:** Analytics Engineer — Time Cérebro da Lu · Magalu
+**Candidato:** Kaique Arlindo
+**Vaga:** Analytics Engineer — Time Cérebro da Lu 
 **Data:** Março 2026
 
 ---
