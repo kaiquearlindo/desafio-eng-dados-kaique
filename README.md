@@ -86,7 +86,8 @@ Os arquivos `campanhas.json` e `conversas.json` foram ingeridos no BigQuery atra
 
 O fluxo de cada job segue as etapas:
 
-```campanhas.json / conversas.json (GCS)
+```
+campanhas.json / conversas.json (GCS)
         ↓
   PySpark (Dataproc)
   - Leitura multiLine JSON
@@ -101,7 +102,8 @@ O fluxo de cada job segue as etapas:
 **3.2 Tabela logs_omnichannel — Tabela Externa via Google Sheets**
 O arquivo `logs_omnichannel.csv` por ser um csv, decidi seguir uma abordagem diferente e mais rápida, realizei a importação dele para Planilha do Google e conectado diretamente ao BigQuery como tabela externa (`GOOGLE_SHEETS`), sem necessidade de pipeline de ingestão.
 
-```logs_omnichannel.csv
+```
+logs_omnichannel.csv
         ↓
   Google Sheets
   (detecção automática de schema)
@@ -118,7 +120,8 @@ Essa abordagem mantém o dado acessível via SQL junto às demais tabelas, e per
 
 **Passo 1 — Verificar se o template existe na tabela `campanhas`:**
 
-```SELECT
+```
+SELECT
   template,
   version,
   COUNT(*)           AS total_disparos,
@@ -148,7 +151,8 @@ ORDER BY 2 DESC;
 
 **Passo 3 — Verificar o JOIN com conversas:**
 
-```SELECT
+```
+SELECT
   c.session_id,
   c.template,
   c.version,
@@ -167,7 +171,8 @@ O JOIN entre as tabelas funciona — o problema está em como o dashboard filtra
 **Passo 4 — Confirmar que o dashboard filtra por sendtype e está quebrando
 -- Simula o filtro que provavelmente está no dashboard**
 
-```SELECT COUNT(*) AS resultado_com_filtro_dashboard
+```
+SELECT COUNT(*) AS resultado_com_filtro_dashboard
 FROM `temp_bq.campanhas`
 WHERE version = 'sendtype-835'
   AND DATE(publish_time) = '2026-03-19';
@@ -177,7 +182,8 @@ O dashboard provavelmente filtra a tabela `campanhas` com `WHERE version = 'send
 
 **Passo 5 — Confirmar a inconsistência comparando com outras campanhas Apple
 -- que têm o campo version preenchido corretamente**
-```SELECT
+```
+SELECT
   template,
   version,
   COUNT(*) AS total,
@@ -248,7 +254,8 @@ ORDER BY publish_time
 
 **Passo 3 — Investigar os logs do Omnichannel:**
 
-```SELECT
+```
+SELECT
   jsonPayload_message    AS mensagem,
   severity,
   timestamp,
@@ -268,7 +275,8 @@ O CTA (Call-to-Action) do botão `"Comprar Galaxy S26"` foi enviado ao pipeline 
 
 **Passo 4 — Confirmar que o envio chegou ao cliente:**
 
-```SELECT
+```
+SELECT
   CASE
     WHEN LOWER(jsonPayload_message) LIKE '%successfully sent%'    THEN 'Entregue ao cliente'
     WHEN LOWER(jsonPayload_message) LIKE '%cannot be deserialized%' THEN 'Erro de deserialização'
