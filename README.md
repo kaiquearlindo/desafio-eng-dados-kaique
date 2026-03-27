@@ -39,13 +39,24 @@ O analista de CRM reportou que duas campanhas de WhatsApp não estavam aparecend
 | Samsung | 838 | `crm_cerebro_galaxys26` | 20/03/2026 |
 
 **Fontes de dados disponíveis:**
-- `campanhas` — registro de configuração dos disparos (Pub/Sub → BigQuery)
+- `campanhas` — registro de configuração dos disparos 
 - `conversas` — mensagens individuais trocadas com clientes
 - `logs_omnichannel.csv` — dump bruto de 12.393 linhas de logs do provedor
 
 ---
 
-## 2. Metodologia de Investigação
+## 2 .Exploração Inicial dos Dados
+
+Antes de pensar em carregar no BigQuery, realizei uma análise exploratória local para entender a estrutura das tabelas:
+
+**campanhas.json**: 11.445 registros · campos: `session_id`, `template`, `version`, `channel_client_id`, `publish_time`, `message_id`, `source`
+
+**conversas.json**: 46.960 registros · campos: `session_id`, `text`, `author`, `user_id`, `publish_time`, `media_type`
+
+**logs_omnichannel.csv**: 12.393 linhas · logs estruturados do GKE com `jsonPayload.message`, `severity`, `timestamp`
+
+
+## 2.1 Metodologia de Investigação
 
 Antes de olhar os dados, formulei as hipóteses em três categorias:
 
@@ -65,49 +76,126 @@ O fluxo de investigação seguiu a pirâmide: fonte bruta → tabela de staging 
 Se o dado existe na fonte bruta mas não no dashboard, o problema está no meio do caminho.
 
 ---
+## 3. Preparação dos Dados para Análise e Investigação no BigQuery
+Antes de iniciar as consultas de investigação, pensei em disponibilizar as três fontes de dados no BigQuery, caso a **área de CRM ou alguma outra equipe** queira tentar entender melhor o processo de **troubleshooting** feito neste caso. 
 
-## 3. Investigação: Campanha Apple (Send Type 835)
+Sendo assim, segui uma estratégia diferente para cada fonte, de acordo com seu formato de origem.
 
-### 3.1 Passo a passo
+**3.1 Tabelas campanhas e conversas — Ingestão via DAG Airflow + PySpark**
+Os arquivos `campanhas.json` e `conversas.json` foram ingeridos no BigQuery através de uma DAG que desenvolvi - Airflow (`CerebroLuLogsLoad`), utilizando o padrão interno da Plataforma com `MinecraftOperator` e jobs PySpark no Dataproc.
+
+O fluxo de cada job segue as etapas:
+
+```campanhas.json / conversas.json (GCS)
+        ↓
+  PySpark (Dataproc)
+  - Leitura multiLine JSON
+  - Cast de attributes → STRING
+  - Parse de publish_time → TIMESTAMP
+        ↓
+  BigQuery
+  maga-bigdata.temp_bq.campanhas
+  maga-bigdata.temp_bq.conversas
+```
+
+**3.2 Tabela logs_omnichannel — Tabela Externa via Google Sheets**
+O arquivo `logs_omnichannel.csv` por ser um csv, decidi seguir uma abordagem diferente e mais rápida, realizei a importação dele para Planilha do Google e conectado diretamente ao BigQuery como tabela externa (`GOOGLE_SHEETS`), sem necessidade de pipeline de ingestão.
+
+```logs_omnichannel.csv
+        ↓
+  Google Sheets
+  (detecção automática de schema)
+        ↓
+  BigQuery — Tabela Externa
+  maga-bigdata.temp_bq.logs_omnichannel
+```
+Essa abordagem mantém o dado acessível via SQL junto às demais tabelas, e permite cruzar os logs com campanhas e conversas diretamente no BigQuery.
+
+
+## 4. Investigação: Campanha Apple (Send Type 835)
+
+### 4.1 Passo a passo
 
 **Passo 1 — Verificar se o template existe na tabela `campanhas`:**
 
-```sql
--- query: 01_investigacao_apple.sql
-SELECT
+```SELECT
   template,
   version,
-  COUNT(*) AS total_disparos,
+  COUNT(*)           AS total_disparos,
   DATE(publish_time) AS data_disparo
-FROM `projeto.dataset.campanhas`
-WHERE template LIKE '%crm_cerebro_ads_apple%'
+FROM `temp_bq.campanhas`
+WHERE template IN ('crm_cerebro_ads_apple_1903', 'crm_cerebro_galaxys26')
+   OR template LIKE '%crm_cerebro_ads_apple%'
 GROUP BY 1, 2, 4
 ORDER BY 4;
 ```
 
 **Resultado:** O template existe — 149 disparos em 19/03 e 92 em 20/03. Porém o campo `version` está gravado como `'1'`, não `'sendtype-835'`.
 
-**Passo 2 — Verificar o JOIN com conversas:**
+**Passo 2 — Verificar todos os send types (versions) que existem na tabela campanhas:**
 
 ```sql
 SELECT
+  version,
+  COUNT(*) AS total
+FROM `temp_bq.campanhas`
+GROUP BY 1
+ORDER BY 2 DESC;
+```
+
+**Resultado:** Não localizado templates 'sendtype-835'.
+
+
+**Passo 3 — Verificar o JOIN com conversas:**
+
+```SELECT
   c.session_id,
   c.template,
   c.version,
   cv.text,
   cv.author
-FROM `projeto.dataset.campanhas` c
-LEFT JOIN `projeto.dataset.conversas` cv
+FROM `temp_bq.campanhas` c
+LEFT JOIN `temp_bq.conversas` cv
   ON c.session_id = cv.session_id
 WHERE c.template LIKE '%crm_cerebro_ads_apple%'
   AND DATE(c.publish_time) = '2026-03-19';
 ```
+**Resultado:** 149 sessions da Apple sem nenhum match em conversas (0/149). 
+O JOIN entre as tabelas funciona — o problema está em como o dashboard filtra por Send Type.
 
-**Resultado:** 149 sessions da Apple **sem nenhum match** em conversas (0/149). O JOIN entre as tabelas funciona — o problema está em como o dashboard **filtra** por Send Type.
 
-**Passo 3 — Entender o filtro do dashboard:**
+**Passo 4 — Confirmar que o dashboard filtra por sendtype e está quebrando
+-- Simula o filtro que provavelmente está no dashboard**
 
-O dashboard provavelmente filtra a tabela `campanhas` com `WHERE version = 'sendtype-835'`. Como os registros desta campanha foram gravados com `version = '1'`, eles ficam invisíveis para o painel.
+```SELECT COUNT(*) AS resultado_com_filtro_dashboard
+FROM `temp_bq.campanhas`
+WHERE version = 'sendtype-835'
+  AND DATE(publish_time) = '2026-03-19';
+```
+**Resultado:** 0 registros - CONFIRMA: o dashboard não acha os dados porque version = '1', não 'sendtype-835'
+O dashboard provavelmente filtra a tabela `campanhas` com `WHERE version = 'sendtype-835'`. 
+
+**Passo 5 — Confirmar a inconsistência comparando com outras campanhas Apple
+-- que têm o campo version preenchido corretamente**
+```SELECT
+  template,
+  version,
+  COUNT(*) AS total,
+  DATE(publish_time) AS data
+FROM `temp_bq.campanhas`
+WHERE template LIKE '%apple%'
+GROUP BY 1, 2, 4
+ORDER BY 4;
+```
+
+Resultado:
+PADRÃO NORMAL (campanhas Natal):
+  apple7_natal_2025    | sendtype-758 | 11 | 2026-...
+  apple16e_natal_2025  | sendtype-757 | 5  | 2026-...
+
+PADRÃO QUEBRADO (campanha Cérebro):
+  crm_cerebro_ads_apple_* | 1 | N | 2026-03-19
+
 
 ### 3.2 Causa Raiz
 
@@ -135,7 +223,7 @@ O dashboard provavelmente filtra a tabela `campanhas` com `WHERE version = 'send
 
 ```sql
 SELECT COUNT(*)
-FROM `projeto.dataset.campanhas`
+FROM `temp_bq.campanhas`
 WHERE template = 'crm_cerebro_galaxys26';
 ```
 
@@ -149,37 +237,52 @@ SELECT
   text,
   author,
   publish_time
-FROM `projeto.dataset.conversas`
+FROM `temp_bq.conversas`
 WHERE LOWER(text) LIKE '%cupoms26%'
    OR LOWER(text) LIKE '%galaxy s26%'
    OR LOWER(text) LIKE '%comprar galaxy%'
 ORDER BY publish_time
-LIMIT 20;
 ```
 
 **Resultado:** 4.140 registros de clientes interagindo com o conteúdo da campanha Samsung — inclusive com o texto completo da mensagem da Lu e uso do cupom `CUPOMS26`. Isso prova que **a campanha foi enviada e os clientes receberam**.
 
 **Passo 3 — Investigar os logs do Omnichannel:**
 
-```python
-samsung_logs = df_logs[
-    df_logs['jsonPayload.message'].str.contains(
-        'Comprar Galaxy S26|CUPOMS26', case=False, na=False
-    )
-]
+```SELECT
+  jsonPayload_message    AS mensagem,
+  severity,
+  timestamp,
+  COUNT(*)               AS ocorrencias
+FROM `temp_bq.logs_omnichannel`
+WHERE LOWER(jsonPayload_message) LIKE '%cannot be deserialized%'
+   OR LOWER(jsonPayload_message) LIKE '%comprar galaxy s26%'
+   OR LOWER(jsonPayload_message) LIKE '%cupoms26%'
+GROUP BY 1, 2, 3
+ORDER BY 3;
 ```
 
-**Resultado:** 40+ entradas de log com o erro:
+**Resultado:** Muitas entradas de log com o erro: `It is not a JSON type and cannot be deserialized:` + mensagem.
 
-```
-It is not a JSON type and cannot be deserialized: Comprar Galaxy S26
-```
-
+`
 O CTA (Call-to-Action) do botão `"Comprar Galaxy S26"` foi enviado ao pipeline como **texto puro**, e o serviço de ingestão tentou fazer o parse como JSON — e falhou. Como a deserialização quebrou, a mensagem nunca foi publicada no tópico do Pub/Sub e, consequentemente, **nunca chegou à tabela `campanhas`**.
 
 **Passo 4 — Confirmar que o envio chegou ao cliente:**
 
-Logs com `Successfully sent message` confirmam que o Omnichannel entregou as mensagens aos destinatários. O erro ocorreu na **camada de callback/tracking**, não no envio em si.
+```SELECT
+  CASE
+    WHEN LOWER(jsonPayload_message) LIKE '%successfully sent%'    THEN 'Entregue ao cliente'
+    WHEN LOWER(jsonPayload_message) LIKE '%cannot be deserialized%' THEN 'Erro de deserialização'
+    ELSE 'Outro'
+  END                  AS tipo_evento,
+  COUNT(*)             AS ocorrencias
+FROM `temp_bq.logs_omnichannel`
+WHERE LOWER(jsonPayload_message) LIKE '%successfully sent%'
+   OR LOWER(jsonPayload_message) LIKE '%cannot be deserialized%'
+GROUP BY 1
+ORDER BY 2 DESC;
+```
+
+**Resultado:** Logs com Successfully sent message confirmam que o Omnichannel entregou as mensagens aos destinatários. O erro ocorreu na camada de callback/tracking, não no envio em si.
 
 ### 4.2 Causa Raiz
 
@@ -193,7 +296,7 @@ Logs com `Successfully sent message` confirmam que o Omnichannel entregou as men
 |---|---|
 | Registros em `campanhas` com template `crm_cerebro_galaxys26` | **0** |
 | Conversas com conteúdo da campanha (texto Lu + CUPOMS26) | **4.140** |
-| Logs com erro de deserialização do CTA | **40** |
+| Logs com erro de deserialização do CTA | **+1000** |
 | Padrão do erro | `It is not a JSON type and cannot be deserialized: Comprar Galaxy S26` |
 | Clientes que usaram o cupom CUPOMS26 | confirmado via conversas |
 
@@ -203,151 +306,82 @@ Logs com `Successfully sent message` confirmam que o Omnichannel entregou as men
 
 | Campanha | Problema | Onde | Os dados chegaram ao cliente? | Aparece no dashboard? |
 |---|---|---|---|---|
-| Apple (835) | Campo `version` gravado como `'1'` ao invés de `'sendtype-835'` | Ingestão Pub/Sub → BigQuery | ✅ Sim | ❌ Não |
+| Apple (835) | Campo `version` gravado como `'1'` ao invés de `'sendtype-835'` | Ingestão Pub/Sub → Fonte | ✅ Sim | ❌ Não |
 | Samsung (838) | CTA não serializado como JSON → falha no pipeline | Omnichannel → Pub/Sub | ✅ Sim | ❌ Não |
 
 ---
 
 ## 6. Mensagem para o Analista de CRM
 
-> Mensagem enviada via Google Chat:
-
 ---
 
-**Oi [Analista de CRM]. Boa tarde, tudo jóia?**
+Oi [Analista de CRM]. Boa tarde, tudo bem?
 
-Analisamos aqui as duas campanhas e conseguimos entender o que aconteceu. A boa notícia é que **as mensagens chegaram aos clientes** nos dois casos, então o impacto na operação foi mínimo. 
-O problema em si está na camada de rastreamento, que explicarei melhor abaixo:
+Analisamos aqui as duas campanhas e conseguimos entender o que aconteceu. A boa notícia é que as mensagens chegaram aos clientes nos dois casos, então o impacto na operação foi mínimo. O problema em si está na camada de rastreamento, que explicarei melhor abaixo:
 
-**Campanha Apple (19/03)**
-Os disparos foram realizados normalmente — temos 149 registros confirmados na base. O que aconteceu é que um campo de identificação (o `version`, que deveria conter `sendtype-835`) foi gravado com o valor genérico `'1'`. Por isso, quando o painel tenta buscar os disparos pelo Send Type 835, ele não encontra nada. **Os dados estão lá, só precisamos corrigir o filtro  troca version = 'sendtype-835' por version IN ('sendtype-835', '1') AND template LIKE '%crm_cerebro_ads_apple% ou reprocessar o campo.**
+1. Campanha Apple (19/03): Os disparos foram realizados normalmente — temos 149 registros confirmados na base. O que aconteceu é que um campo de identificação (o version, que deveria conter sendtype-835) foi gravado com o valor genérico '1'. Por isso, quando o dashboard tenta buscar os disparos pelo sendtype-835, ele não encontra nada. 
 
-**Campanha Samsung (20/03)**
-Aqui o caso é diferente: o pipeline de rastreamento teve um problema ao registrar os disparos. O botão `"Comprar Galaxy S26"` foi enviado num formato que o sistema não conseguiu processar, e os eventos foram descartados antes de chegarem ao banco. Mas posso confirmar pelo histórico de conversas que **mais de 4.000 clientes receberam e interagiram com a campanha**, e o cupom CUPOMS26 foi utilizado. Então o envio ocorreu — só não ficou registrado como campanha.
+Os dados estão lá, para resolver inicialmente precisamos corrigir no dashboard o filtro: 
 
-**O que farei agora:**
-1. Corrigir o filtro do dashboard para cobrir os registros da Apple com `version = '1'`.
-2. Corrigir na origem e investigar por que o Pub/Sub gravou '1' ao invés de 'sendtype-835', para os próximos disparos já chegarem corretos para nós na raw.
-3. Verificar com a equipe para ajustar a serialização do CTA da Samsung.
-4. Propor um monitor automático para detectar esse tipo de falha antes que chegue até vocês*****
+Trocar o filtro da versão que está pegando somente um template, e incluir também o template com valor '1', posso auxiliar nesta mudança e validarmos juntos.
+
+version = 'sendtype-835' por version IN ('sendtype-835', '1') AND template LIKE '%crm_cerebro_ads_apple% .
+
+2. Campanha Samsung (20/03): Aqui o caso é diferente: o fluxo de rastreamento teve um problema ao registrar os disparos. O botão "Comprar Galaxy S26" foi enviado num formato que o sistema não conseguiu processar, e os eventos foram descartados antes de chegarem ao banco. Mas posso confirmar pelo histórico de conversas que mais de 4.000 clientes receberam e interagiram com a campanha, e o cupom CUPOMS26 foi utilizado. Então o envio ocorreu, só não ficou registrado como campanha na base de dados.
+
+Sendo assim, irei trocar internamente com o time aqui estes pontos, para realizarmos a correção e nas próximas conseguirmos detectar essas anomalias antes que cheguem até vocês.
 
 Qualquer dúvida, estamos à disposição.
 
 ---
 
-## 7. Proposta de Monitoramento Contínuo
+## 8. Próximos Passos
+
+1. Verificar a possibilidade de corrigir na origem e investigar por que o Pub/Sub gravou '1' ao invés de 'sendtype-835', para os próximos disparos já chegarem corretos para nós na raw.
+
+2. Verificar com a equipe para ajustar a serialização do CTA da Samsung.
+
+3. Propor um monitorias automáticas para detectar esse tipo de falha antes que cheguem a outras equipes.
 
 O objetivo é que a equipe de dados seja **a primeira a saber** quando algo quebra — não o time de negócio.
 
-### 7.1 Alertas no BigQuery com Scheduled Queries
+## 8.1 Proposta de Monitoramento Contínuo
 
-**Monitor 1 — Version inválida na tabela campanhas**
+O objetivo é que a equipe de dados seja a primeira a saber quando algo quebra — não o time de negócio.
 
-```sql
--- Detecta campanhas com version não padronizada
--- Roda diariamente às 07h
-SELECT
-  template,
-  version,
-  COUNT(*) AS total,
-  MIN(publish_time) AS primeiro_disparo
-FROM `projeto.dataset.campanhas`
-WHERE DATE(publish_time) = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
-  AND version NOT LIKE 'sendtype-%'
-  AND version NOT IN ('v2') -- versões alternativas conhecidas
-GROUP BY 1, 2
-HAVING total > 0;
-```
+Para evitar que o time de CRM descubra o erro antes de nós, proponho:
 
-> Se retornar linhas → alerta em algum canal do Gchat ou e-mail.
+Monitoramento de Logs (Log-based Metrics): Criar um alerta no Cloud Monitoring (GCP) ou DAG, que dispara uma notificação em um canal da equipe no GChat, sempre que o erro "cannot be deserialized" ocorrer mais de 10 vezes em 5 minutos. Isso nos permite agir no exato momento da falha do envio.
 
-**Monitor 2 — Campanhas disparadas mas sem registro (via conversas)**
+Data Quality Check (Integrity Check): Implementar um teste de integridade (via dbt ou Airflow) que compare diariamente a lista de templates ativos no Log do Provedor com a lista de templates na tabela campanhas. Se houver um template com volume de disparos > 0 que não existe no cadastro, um relatório de "Campanhas Não Mapeadas" é gerado automaticamente.
 
-```sql
--- Detecta se há conversas com cupons/CTAs de campanhas
--- que não têm correspondência na tabela campanhas
-WITH cupons_ativos AS (
-  SELECT DISTINCT
-    REGEXP_EXTRACT(UPPER(text), r'CUPON?[A-Z0-9]+') AS cupom,
-    DATE(publish_time) AS data
-  FROM `projeto.dataset.conversas`
-  WHERE DATE(publish_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY)
-    AND REGEXP_CONTAINS(UPPER(text), r'CUPON?[A-Z0-9]+')
-),
-campanhas_registradas AS (
-  SELECT DISTINCT
-    DATE(publish_time) AS data
-  FROM `projeto.dataset.campanhas`
-  WHERE DATE(publish_time) >= DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY)
-)
-SELECT ca.cupom, ca.data
-FROM cupons_ativos ca
-LEFT JOIN campanhas_registradas cr ON ca.data = cr.data
-WHERE cr.data IS NULL;
-```
+Validação de Schema no Ingestor: Ajustar o serviço de mensageria para rejeitar payloads mal-formatados já na origem, enviando um log de erro mais descritivo que aponte exatamente qual campo do JSON está inválido.
 
-**Monitor 3 — Volume anômalo de erros de deserialização (via Cloud Logging)**
 
-Criar uma métrica baseada em log no Cloud Monitoring:
+## 9. Infraestrutura Utilizada
 
-```
-resource.type="k8s_container"
-jsonPayload.message =~ "cannot be deserialized"
-severity="INFO"
-```
+BigQuery — armazenamento e consulta das tabelas campanhas, conversas e logs_omnichannel
 
-Configurar alerta se `count > 10 em 30 minutos`.
+Projeto: maga-bigdata Dataset: temp_bq
 
-### 7.2 Dashboard de Saúde do Pipeline
+Origem dos arquivos: gs://stg-lake-raw-data_governance/
 
-Criar uma view no BigQuery que serve como "semáforo" diário:
+Apache Airflow — orquestração via DAG CerebroLuLogsLoad usando o padrão interno do Magalu
 
-```sql
-CREATE OR REPLACE VIEW `projeto.dataset.vw_saude_pipeline` AS
-SELECT
-  DATE(publish_time) AS data,
-  COUNT(*) AS total_disparos,
-  COUNTIF(version NOT LIKE 'sendtype-%' AND version != 'v2') AS disparos_version_invalida,
-  COUNT(DISTINCT template) AS templates_ativos,
-  ROUND(
-    COUNTIF(version NOT LIKE 'sendtype-%' AND version != 'v2') / COUNT(*) * 100, 2
-  ) AS pct_versao_invalida
-FROM `projeto.dataset.campanhas`
-GROUP BY 1
-ORDER BY 1 DESC;
-```
+MinecraftOperator para submissão dos jobs PySpark no Dataproc
 
-### 7.3 Fluxo de Resposta Proposto
+build_ness_etl_path para resolução dos caminhos dos scripts (sness)
 
-```
-Erro detectado (monitor dispara)
-        ↓
-Alerta no canal da equipe (Gchat)
-        ↓
-Engenheiro verifica em < 30min
-        ↓
-Se campanha ativa: notifica CRM proativamente
-        ↓
-RCA documentado no Confluence
-```
+Duas tasks de ingestão (ingest_campanhas e ingest_conversas) rodando em paralelo
 
----
+PySpark — jobs de leitura e escrita para o BigQuery
 
-## 8. Infraestrutura Utilizada
+ingest_campanhas.py: leitura multiLine JSON, cast de attributes para STRING, parse de publish_time para TIMESTAMP
 
-- **BigQuery** — armazenamento e consulta das tabelas `campanhas`, `conversas` e `logs_omnichannel`
-- **Apache Airflow (Cloud Composer)** — DAG para ingestão dos arquivos JSON (campanhas, conversas) → BigQuery
-- **Python / Pandas** — exploração inicial dos dados antes da ingestão
-- **Cloud Logging / Cloud Monitoring** — base para os alertas de log
+ingest_conversas.py: leitura multiLine JSON, parse de publish_time para TIMESTAMP
 
----
+Escrita com mode("overwrite") via conector BigQuery com bucket temporário GCS
 
-## Apêndice: Exploração Inicial dos Dados
+Python / Pandas — exploração inicial dos dados antes da ingestão
 
-Antes de carregar no BigQuery, realizei uma análise exploratória local para entender a estrutura das tabelas e formular hipóteses:
-
-- `campanhas.json`: 11.445 registros · campos: `session_id`, `template`, `version`, `channel_client_id`, `publish_time`, `message_id`, `source`
-- `conversas.json`: 46.960 registros · campos: `session_id`, `text`, `author`, `user_id`, `publish_time`, `media_type`
-- `logs_omnichannel.csv`: 12.393 linhas · logs estruturados do GKE com `jsonPayload.message`, `severity`, `timestamp`
-
-Scripts de exploração disponíveis em `/scripts/exploracao_inicial.py`.
+-------
