@@ -5,7 +5,7 @@
 
 -- PASSO 1: Verificar se o template existe na tabela campanhas
 SELECT COUNT(*)
-FROM `maga-bigdata.temp_bq.campanhas`
+FROM `temp_bq.campanhas`
 WHERE template = 'crm_cerebro_galaxys26';
 
 /*
