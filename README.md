@@ -10,15 +10,21 @@
 
 ```
 .
-├── README.md                        ← Este documento (narrativa completa)
-├── queries/
-│   ├── 01_investigacao_apple.sql    ← Queries de diagnóstico campanha Apple
-│   ├── 02_investigacao_samsung.sql  ← Queries de diagnóstico campanha Samsung
-│   └── 03_monitoramento.sql         ← Proposta de alertas contínuos
-├── scripts/
-│   └── exploracao_inicial.py        ← EDA dos dados brutos antes do BigQuery
-└── dag/
-    └── campanhas_to_bigquery.py     ← DAG Airflow: JSON → BigQuery
+├── README.md                                    ← Este documento (narrativa completa)
+├── 01_investigacao_apple.sql                    ← Queries de diagnóstico campanha Apple
+├── 02_investigacao_samsung.sql                  ← Queries de diagnóstico campanha Samsung
+├── exploracao_inicial.py                        ← First Análise dos dados brutos: registros e campos de cada fonte
+└── cerebro_lu_logs_load/                        ← Pipeline de ingestão (DAG/Sness)
+    ├── README.md                                ← Descrição do projeto de ingestão
+    ├── dags/
+    │   └── main.py                              ← DAG Airflow: orquestração da carga JSON → BigQuery
+    └── etls/
+        ├── raw/
+        │   ├── ingest_campanhas.py              ← Job PySpark: campanhas.json → temp_bq.campanhas
+        │   └── ingest_conversas.py              ← Job PySpark: conversas.json → temp_bq.conversas
+        ├── trusted/                             
+        ├── refined/                             
+        └── ml/                                  
 ```
 
 ---
