@@ -1,4 +1,4 @@
--- 02_investigacao_samsung.sql
+-- 02_investigacao_samsung.sql -
 -- PASSO 1: Verificar se o template existe na tabela campanhas
 SELECT COUNT(*)
 FROM `temp_bq.campanhas`
