@@ -1,8 +1,4 @@
--- ============================================================
 -- 02_investigacao_samsung.sql
--- Investigação: Campanha Samsung Galaxy S26 (Send Type 838 / crm_cerebro_galaxys26)
--- ============================================================
-
 -- PASSO 1: Verificar se o template existe na tabela campanhas
 SELECT COUNT(*)
 FROM `temp_bq.campanhas`
