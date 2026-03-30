@@ -1,7 +1,3 @@
--- ============================================================
--- 01_investigacao_apple.sql
--- Investigação: Campanha Apple (Send Type 835 / crm_cerebro_ads_apple_1903)
--- ============================================================
 
 -- PASSO 1: Verificar se o template existe na tabela campanhas
 -- e qual valor está no campo version
