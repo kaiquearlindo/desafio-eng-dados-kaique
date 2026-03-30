@@ -1,3 +1,4 @@
+-- 01. Investigação Apple
 
 -- PASSO 1: Verificar se o template existe na tabela campanhas
 -- e qual valor está no campo version
