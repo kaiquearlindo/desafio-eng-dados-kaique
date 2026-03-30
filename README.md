@@ -51,7 +51,7 @@ Antes de pensar em carregar no BigQuery, realizei uma análise exploratória loc
 
 - **`campanhas.json`**: 11.445 registros · campos: `session_id`, `template`, `version`, `channel_client_id`, `publish_time`, `message_id`, `source`
 - **`conversas.json`**: 46.960 registros · campos: `session_id`, `text`, `author`, `user_id`, `publish_time`, `media_type`
-- **`logs_omnichannel.csv`**: 10.000 registros · logs estruturados do GKE com `jsonPayload.message`, `severity`, `timestamp`
+- **`logs_omnichannel.csv`**: 12.393 linhas · logs estruturados do GKE com `jsonPayload.message`, `severity`, `timestamp` (no cluster retorna 10.000 linhas devido limite)
 
 Script disponível em: `exploracao_inicial.py`
 
@@ -354,7 +354,7 @@ ORDER BY 2 DESC;
 
 ---
 
-Oi [Nome], boa tarde! Tudo bem?
+Oi [Analista de CRM], boa tarde! Tudo bem?
 
 Analisamos as duas campanhas e conseguimos entender o que aconteceu. A boa notícia é que **as mensagens chegaram aos clientes** nos dois casos — então o impacto na operação foi mínimo. O problema está na camada de rastreamento, que explico abaixo:
 
@@ -398,7 +398,12 @@ O objetivo é que a equipe de dados seja **a primeira a saber** quando algo queb
 Criar um alerta no Cloud Monitoring (GCP) que dispara uma notificação no canal da equipe no Google Chat sempre que o erro `"cannot be deserialized"` ocorrer mais de 10 vezes em 5 minutos. Isso permite agir no exato momento da falha, antes que qualquer campanha passe despercebida.
 
 **Data Quality Check (Integrity Check)**
-Implementar um teste de integridade via dbt ou Airflow que compare diariamente a lista de templates ativos nos logs do provedor com a lista de templates na tabela `campanhas`. Se houver um template com volume de disparos > 0 que não exista no cadastro, um relatório de "Campanhas Não Mapeadas" é gerado automaticamente.
+Implementar um teste de integridade via dbt ou Airflow que rode diariamente e faça duas verificações:
+
+**Verificação A — Campanhas Não Mapeadas (via conversas):**
+Comparar os `session_id` presentes em `conversas` com os `session_id` presentes em `campanhas`. Se existirem sessões em conversas cujo conteúdo contenha padrões de campanha (cupons, CTAs conhecidos) mas sem correspondência em `campanhas`, um relatório de "Campanha Disparada Sem Registro" é gerado automaticamente.
+
+**Verificação B — Templates com Version Inválida:** Checar diariamente se existem registros na tabela `campanhas` com `version` fora do padrão `sendtype-XXX`. Esse check teria detectado o problema da Apple no dia seguinte ao disparo.
 
 **Validação de Schema no Ingestor**
 Ajustar o serviço de mensageria para rejeitar payloads mal-formatados já na origem, enviando um log de erro descritivo que aponte exatamente qual campo do JSON está inválido — facilitando o diagnóstico rápido em casos futuros.
@@ -409,7 +414,6 @@ Ajustar o serviço de mensageria para rejeitar payloads mal-formatados já na or
 
 **BigQuery** — armazenamento e consulta das tabelas `campanhas`, `conversas` e `logs_omnichannel`
 - Projeto: `maga-bigdata` · Dataset: `temp_bq`
-- Origem dos arquivos: `gs://stg-lake-raw-data_governance/`
 
 **Apache Airflow** — orquestração via DAG `CerebroLuLogsLoad` usando o padrão interno do Magalu
 - `MinecraftOperator` para submissão dos jobs PySpark no Dataproc
@@ -422,6 +426,6 @@ Ajustar o serviço de mensageria para rejeitar payloads mal-formatados já na or
 - `ingest_conversas.py`: leitura multiLine JSON, parse de `publish_time` para TIMESTAMP
 - Escrita com `mode("overwrite")` via conector BigQuery com bucket temporário GCS
 
-**Python / Pandas** — exploração inicial dos dados antes da ingestão (`exploracao_inicial.py`)
+**Cluster de Exploração (Jupyter/Python/Pandas)** — exploração inicial dos dados antes da ingestão ao BQ e análises investigativas. 
 
-**Google Sheets** — importação do `logs_omnichannel.csv` como tabela externa no BigQuery
+**Gemini** — utilizado como assistente durante o processo de investigação para apoio, estruturação e formatação da narrativa do README e Documentação. 
